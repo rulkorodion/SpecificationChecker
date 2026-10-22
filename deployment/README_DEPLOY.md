@@ -1,62 +1,70 @@
-# Specification Checker — offline GPU deployment
+# Проверка спецификаций — автономное развёртывание с GPU
 
-Package version: `0.1.4-stage6.20260806`  
-Target platform: `linux/amd64`
+- Версия пакета: `0.1.4-stage6.20260806`
+- Целевая платформа: `linux/amd64`
 
-The GPU worker uses `python:3.12-slim-bookworm` plus the official PyTorch 2.7.1
-`cu128` binary dependencies with Blackwell `sm_120` support. It intentionally does not add a second
-`nvidia/cuda` runtime layer; the server still requires an NVIDIA driver and
-NVIDIA Container Toolkit.
+GPU-обработчик использует `python:3.12-slim-bookworm` и официальные бинарные
+зависимости PyTorch 2.7.1 `cu128` с поддержкой Blackwell `sm_120`. Отдельный
+слой среды выполнения `nvidia/cuda` намеренно не добавляется; на сервере всё
+равно должны быть установлены драйвер NVIDIA и NVIDIA Container Toolkit.
 
-The worker contains only the verified MonkeyOCR inference path: PyTorch SDPA,
-deterministic generation, KV cache, and the validated per-input pixel limit.
-Both worker containers use the same image; GPU 0 and GPU 1 are selected by
-Compose and each process loads one model instance.
+Обработчик содержит только проверенный способ выполнения MonkeyOCR: PyTorch
+SDPA, детерминированную генерацию, KV-кэш и проверенное ограничение пикселей для
+одного входа. Оба контейнера обработчиков используют один образ; GPU 0 и GPU 1
+выбираются через Compose, а каждый процесс загружает один экземпляр модели.
 
-The package contains prebuilt API, GPU-worker, PostgreSQL and Redis images. It does not contain application source, test data other than one smoke PDF/reference, secrets, runtime data, database volumes, or MonkeyOCR weights.
+Пакет содержит готовые образы API, GPU-обработчика, PostgreSQL и Redis. В него
+не входят исходный код приложения, тестовые данные кроме одного проверочного
+PDF и эталонного JSON, секреты, рабочие данные, тома базы данных и веса
+MonkeyOCR.
 
-## Server prerequisites
+## Требования к серверу
 
 - Linux x86_64;
-- Docker Engine 24 or newer;
-- Docker Compose plugin 2 or newer;
-- NVIDIA driver compatible with CUDA 12.8;
-- NVIDIA Container Toolkit configured for Docker;
+- Docker Engine 24 или новее;
+- плагин Docker Compose 2 или новее;
+- драйвер NVIDIA, совместимый с CUDA 12.8;
+- NVIDIA Container Toolkit, настроенный для Docker;
 - `curl`, `sha256sum`, `nvidia-smi`;
-- at least 25 GiB free disk space for loading and running the images.
+- не менее 25 ГиБ свободного места для загрузки и запуска образов.
 
-The server does not need Python, PyTorch, CUDA SDK, PostgreSQL or Redis packages installed on the host. They are inside the offline Docker images. NVIDIA driver and Container Toolkit cannot be packaged inside an application image and must exist on the server.
+На сервер не нужно отдельно устанавливать Python, PyTorch, CUDA SDK, PostgreSQL
+или Redis: они находятся внутри автономных Docker-образов. Драйвер NVIDIA и
+Container Toolkit нельзя упаковать в образ приложения, поэтому они должны быть
+установлены на самом сервере.
 
-## Copy MonkeyOCR separately
+## Отдельное копирование MonkeyOCR
 
-Create an external model directory:
+Создайте внешний каталог модели:
 
 ```bash
 sudo mkdir -p /opt/models
 sudo chown <server-user>:<server-user> /opt/models
 ```
 
-Copy the local Hugging Face cache root to:
+Скопируйте корень локального кэша Hugging Face в следующую структуру:
 
 ```text
 /opt/models/MonkeyOCRv2-B-Parsing/
   hub/
     models--zenosai--MonkeyOCRv2-B-Parsing/
       snapshots/
-  modules/        # optional; runtime modules use a separate writable cache
+  modules/        # необязательно; рабочие модули используют отдельный доступный для записи кэш
 ```
 
-The model is mounted into the worker as `/models/huggingface:ro`. Production sets `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` and `local_files_only: true`; the worker must not download model weights.
+Модель подключается к обработчику как `/models/huggingface:ro`. В production-
+режиме заданы `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` и
+`local_files_only: true`; обработчик не должен загружать веса модели из сети.
 
-## Transfer
+## Передача файлов
 
-SCP/SFTP directory variant:
+Вариант с каталогом через SCP/SFTP:
 
 ```bash
 scp -r deployment server-user@server:/opt/specification-checker/
 ```
 
-Single archive variant:
+Вариант с единым архивом:
 
 ```bash
 scp deployment-package-0.1.4-stage6.20260806-linux-amd64.tar.gz* server-user@server:/opt/specification-checker/
@@ -67,7 +75,7 @@ tar -xzf deployment-package-0.1.4-stage6.20260806-linux-amd64.tar.gz
 cd deployment
 ```
 
-## Configure and deploy
+## Настройка и развёртывание
 
 ```bash
 cp .env.production.example .env.production
@@ -75,17 +83,17 @@ chmod 600 .env.production
 chmod +x scripts/*.sh
 ```
 
-Edit `.env.production`:
+Отредактируйте `.env.production`:
 
-- replace `POSTGRES_PASSWORD`;
-- put the URL-encoded password in `DATABASE_URL`;
-- verify `MONKEYOCR_MODEL_PATH`;
-- choose the API bind address;
-- do not enable 1C until the real adapter is implemented.
+- замените `POSTGRES_PASSWORD`;
+- укажите в `DATABASE_URL` пароль с URL-кодированием;
+- проверьте `MONKEYOCR_MODEL_PATH`;
+- выберите адрес привязки API;
+- не включайте интеграцию с 1С до реализации реального адаптера.
 
-The production template uses the same validated inference settings as the
-previous local runs. The following safe limits may be changed in
-`.env.production` without rebuilding the worker image:
+Production-шаблон использует те же проверенные настройки выполнения модели,
+что и предыдущие локальные запуски. Следующие безопасные ограничения можно
+изменять в `.env.production` без пересборки образа обработчика:
 
 ```dotenv
 MONKEYOCR_DTYPE=auto
@@ -95,10 +103,11 @@ MONKEYOCR_PDF_RENDER_DPI=300
 EXPECTED_WORKER_COUNT=2
 ```
 
-Startup logs show the effective dtype/backend and every inference call logs its
-application/processor image size, visual-token count and generation limit.
+При запуске в журнал выводятся фактический тип данных и механизм выполнения, а
+для каждого вызова модели — размеры изображения приложения и процессора, число
+визуальных токенов и лимит генерации.
 
-Then run, in this order:
+Затем последовательно выполните:
 
 ```bash
 scripts/check-host.sh
@@ -109,11 +118,16 @@ scripts/status.sh
 scripts/smoke-test.sh
 ```
 
-The first host check validates Linux, architecture, Docker, Compose, the host GPU, model layout and disk. Container GPU validation is deferred until the worker image is loaded. `deploy.sh` repeats it as a mandatory check and refuses to start if NVIDIA Container Toolkit cannot expose the GPU.
+Первая проверка сервера проверяет Linux, архитектуру, Docker, Compose, GPU
+сервера, структуру каталога модели и свободное место. Проверка GPU внутри
+контейнера откладывается до загрузки образа обработчика. `deploy.sh` повторяет
+её как обязательную проверку и отказывается запускать систему, если NVIDIA
+Container Toolkit не может предоставить контейнеру GPU.
 
-No script executes `docker compose build`, `docker compose pull`, or `docker compose down -v`.
+Ни один сценарий не выполняет `docker compose build`, `docker compose pull`
+или `docker compose down -v`.
 
-## Operations
+## Управление системой
 
 ```bash
 scripts/status.sh
@@ -122,13 +136,16 @@ scripts/logs.sh api
 scripts/stop.sh
 ```
 
-`stop.sh` keeps PostgreSQL, Redis, jobs and runtime volumes. Re-running `deploy.sh` applies Alembic migrations and starts the existing volumes.
+`stop.sh` сохраняет PostgreSQL, Redis, задания и рабочие тома. Повторный запуск
+`deploy.sh` применяет миграции Alembic и запускает существующие тома.
 
-Swagger is disabled in production. Health is available at `/health`. The smoke test submits only `smoke/document.pdf` and `smoke/reference.json`; no ground truth is sent through the API.
+Swagger отключён в production-режиме. Проверка состояния доступна по
+`/health`. Проверочный тест отправляет только `smoke/document.pdf` и
+`smoke/reference.json`; разметка правильных ответов через API не передаётся.
 
-## Offline images
+## Автономные образы
 
-Expected tags:
+Ожидаемые теги:
 
 ```text
 specification-checker-api:0.1.1-stage6.20260804
@@ -137,12 +154,15 @@ postgres:18.4-alpine
 redis:7.4.10-alpine
 ```
 
-`scripts/load-images.sh` validates the image archive SHA-256 before `docker load` and checks all four tags afterwards. It never pulls from a registry.
+`scripts/load-images.sh` проверяет SHA-256 архива образов перед `docker load`,
+а после загрузки проверяет наличие всех четырёх тегов. Сценарий никогда не
+загружает образы из реестра.
 
-The API accepts both the legacy `multipart/form-data` upload and the 1C-oriented
-`application/json` request. In JSON mode, `documents` is an ordered array of
-objects containing `filename`, optional `content_type`, and `content_base64`;
-`reference` is a regular nested JSON object. Multiple documents are normalized
-to one PDF before the unchanged worker pipeline receives the job. The default
-maximum is 10 documents per request and can be changed with
-`API_MAX_DOCUMENTS_PER_JOB` in `.env.production`.
+API принимает как прежнюю загрузку `multipart/form-data`, так и ориентированный
+на 1С запрос `application/json`. В режиме JSON поле `documents` является
+упорядоченным массивом объектов с полями `filename`, необязательным
+`content_type` и `content_base64`; `reference` остаётся обычным вложенным
+JSON-объектом. Несколько документов преобразуются в один PDF до передачи
+задания неизменённому конвейеру обработчика. По умолчанию один запрос может
+содержать не более 10 документов; лимит меняется через
+`API_MAX_DOCUMENTS_PER_JOB` в `.env.production`.

@@ -1,16 +1,18 @@
 # Проверка спецификаций
 
-Локальная fail-closed система проверки спецификаций к договорам поставки. Она
+Локальная система проверки спецификаций к договорам поставки, работающая по
+принципу безопасного отказа. Она
 распознаёт документ с помощью MonkeyOCRv2-B-Parsing, извлекает поля, сравнивает
-их с reference JSON, отдельно проверяет подпись и печать покупателя средствами
+их с эталонным JSON, отдельно проверяет подпись и печать покупателя средствами
 OpenCV и формирует `report.json`, краткий консольный отчёт и решение:
 
 - `APPROVE` — обязательные проверки пройдены;
 - `RETURN` — найдено явное несоответствие или нарушение срока;
 - `MANUAL_REVIEW` — доказательств недостаточно либо формат не поддерживается.
 
-Reference и необязательный ground truth не передаются в OCR или extractors.
-Ground truth предназначен только для разработки и оценки качества.
+Эталонные данные и необязательная контрольная разметка не передаются в OCR или
+модули извлечения. Контрольная разметка предназначена только для разработки и
+оценки качества.
 
 ## Поддерживаемый формат
 
@@ -24,51 +26,52 @@ Ground truth предназначен только для разработки �
 ## Архитектура
 
 ```text
-document loader -> fast CPU Page Selector for PDF > 2 pages
-  -> selected_document.pdf (target application in logical page order)
-  -> renderer -> quality assessment
-  -> MonkeyOCRv2 layout detection
-  -> recognition of original-resolution layout crops
-  -> compact OCR cache
-  -> field extraction and normalization
-  -> OpenCV signature/seal detection
-  -> Rule Engine
+загрузчик документа -> быстрый CPU-модуль выбора страниц для PDF > 2 страниц
+  -> selected_document.pdf (нужное приложение в логическом порядке страниц)
+  -> рендеринг -> оценка качества
+  -> определение структуры страницы с помощью MonkeyOCRv2
+  -> распознавание фрагментов в исходном разрешении
+  -> компактный OCR-кэш
+  -> извлечение и нормализация полей
+  -> определение подписи и печати средствами OpenCV
+  -> механизм проверки правил
   -> report.json + console_report.txt
 ```
 
-OCR реализован через единственный backend `monkeyocr-v2`. Модель использует
-официальный checkpoint `zenosai/MonkeyOCRv2-B-Parsing`, закреплённый на ревизии
+OCR реализован через единственный механизм `monkeyocr-v2`. Модель использует
+официальную версию `zenosai/MonkeyOCRv2-B-Parsing`, закреплённую на ревизии
 `de7a993bd0f39a97b122dac767e82ae04935bce4`.
 
-### MonkeyOCR inference
+### Выполнение MonkeyOCR
 
-The application has one verified inference path: native Transformers, SDPA,
-1,003,520 application-side pixels per layout/crop input, deterministic
-generation and KV cache enabled. The discarded full-page/Flash-Attention
-experiment is not present in the code or configuration.
+В приложении оставлен один проверенный способ выполнения модели: нативный
+Transformers, SDPA, не более 1 003 520 пикселей на входной макет или фрагмент,
+детерминированная генерация и включённый KV-кэш. Отклонённый эксперимент с
+полной страницей и Flash Attention отсутствует в коде и конфигурации.
 
-### Page Selector для PDF-пакетов
+### Выбор страниц в PDF-пакетах
 
-Одно- и двухстраничные документы проходят прежний pipeline без дополнительного
-OCR и без преобразования файла. Для PDF длиннее двух страниц worker берёт
-`application_number` из reference и запускает быстрый Tesseract только на
-нижних колонтитулах страниц; верхний crop используется как fallback. Полный
+Одно- и двухстраничные документы проходят прежний конвейер без дополнительного
+OCR и без преобразования файла. Для PDF длиннее двух страниц обработчик берёт
+`application_number` из эталонных данных и запускает быстрый Tesseract только на
+нижних колонтитулах страниц; верхний фрагмент используется как резервный. Полный
 MonkeyOCR на этом этапе не запускается.
 
-Selector требует однозначно найти все отметки вида `Приложение № …, стр. X из
+Модуль выбора страниц должен однозначно найти все отметки вида `Приложение № …, стр. X из
 N`, проверяет отсутствие повторов и восстанавливает порядок `1..N`. Затем он
-собирает `selected_document.pdf`; существующие MonkeyOCR, Extraction и Rule
-Engine получают этот файл без изменений. В каталоге результата сохраняется
+собирает `selected_document.pdf`; существующие модули MonkeyOCR, извлечения
+данных и проверки правил получают этот файл без изменений. В каталоге результата сохраняется
 `page_selection.json` с исходным числом страниц, выбранными физическими
 страницами, логическим порядком и диагностикой. Если номер не найден либо выбор
-неоднозначен, задача завершается ошибкой `page_selection_failed` — selector
-ничего не угадывает.
+неоднозначен, задача завершается ошибкой `page_selection_failed` — модуль ничего
+не угадывает.
 
-Worker-образ содержит системные пакеты `tesseract-ocr` и
+Образ обработчика содержит системные пакеты `tesseract-ocr` и
 `tesseract-ocr-rus`. Веса MonkeyOCR по-прежнему подключаются отдельно и в образ
 не входят.
 
-Only safe resource/quality limits can be changed without rebuilding an image:
+Без пересборки образа можно менять только безопасные ограничения ресурсов и
+качества:
 
 ```dotenv
 MONKEYOCR_DTYPE=auto|bfloat16|float16
@@ -77,35 +80,36 @@ MONKEYOCR_MAX_NEW_TOKENS=
 MONKEYOCR_PDF_RENDER_DPI=300
 ```
 
-`MONKEYOCR_MAX_PIXELS` must be a positive integer. Effective dtype, processor
-size, visual-token count and generation limit are recorded in result metadata.
+`MONKEYOCR_MAX_PIXELS` должен быть положительным целым числом. Фактический тип
+данных, размер входа процессора, число визуальных токенов и лимит генерации
+записываются в метаданные результата.
 
 ## Структура проекта
 
 ```text
-app/                         production-код приложения
+app/                         рабочий код приложения
   api/                       FastAPI
   integrations/              заменяемые адаптеры 1С
-  persistence/               PostgreSQL repository/service
+  persistence/               хранилище и сервис PostgreSQL
   queueing/                  Redis-очередь
-  ocr/                       MonkeyOCR adapter
+  ocr/                       адаптер MonkeyOCR
 alembic/versions/            последовательные миграции БД
-config/                      default/development/production YAML
-docker/                      отдельные Dockerfile API и GPU-worker
-tests/                       автоматические тесты и синтетические fixtures
+config/                      YAML для базовой, локальной и production-конфигурации
+docker/                      отдельные Dockerfile для API и GPU-обработчика
+tests/                       автоматические тесты и синтетические данные
 testdata/specifications/     локальный приватный тестовый корпус (не хранится в Git)
   documents/                реальные документы
   reference/                эталонные данные
   ground_truth/             разметка для оценки качества
   extracted_mock/
-runtime/                     только изменяемые runtime-файлы, не код
+runtime/                     только изменяемые рабочие файлы, не код
 ```
 
 Веса MonkeyOCR не находятся в репозитории и Docker-образе. Они хранятся во
-внешнем каталоге Hugging Face cache и монтируются worker в
+внешнем кэше Hugging Face и подключаются к обработчику в каталог
 `/models/huggingface`.
 
-Реальные спецификации, reference JSON и ground truth также исключены из Git,
+Реальные спецификации, эталонные JSON и контрольная разметка также исключены из Git,
 поскольку содержат внутренние данные. Тесты, которым нужен приватный корпус,
 автоматически пропускаются, если соответствующих локальных файлов нет.
 
@@ -142,7 +146,7 @@ print(result["comment_1c"])
 
 `confidence.overall` — минимальная уверенность среди обязательных проверок.
 Это диагностический показатель: он не заменяет статусы проверок и не участвует
-в выборе решения Rule Engine.
+в выборе решения механизмом правил.
 
 Для серверного процесса рекомендуется явно создать один долгоживущий сервис:
 
@@ -167,13 +171,13 @@ second = checker.check_specification("incoming/41.pdf", reference_41)
 Оба вызова используют один объект MonkeyOCR и один OCR-кэш. Внутренняя
 блокировка обрабатывает документы последовательно, поскольку модель хранит
 изменяемое состояние текущего документа и GPU-буферы. Бизнес-правила,
-пороги и алгоритмы OCR остаются внутри существующего pipeline.
+пороги и алгоритмы OCR остаются внутри существующего конвейера.
 
 ## HTTP API для интеграции с 1С
 
 FastAPI не загружает OCR и не выполняет проверку. Он сохраняет вход в
-PostgreSQL и общий файловый storage, кладёт в Redis только `job_id` и сразу
-возвращает `PROCESSING`. Отдельный последовательный worker создаёт один
+PostgreSQL и общее файловое хранилище, кладёт в Redis только `job_id` и сразу
+возвращает `PROCESSING`. Отдельный последовательный обработчик создаёт один
 `SpecificationCheckerService`, поэтому MonkeyOCR загружается один раз и
 переиспользуется для следующих документов.
 
@@ -254,15 +258,15 @@ redis-server --port 6379 --save "" --appendonly no
 ```
 
 `WORKER_JOB_TIMEOUT_SECONDS` — мягкий диагностический лимит: превышение
-пишется в лог, но активный GPU-вызов принудительно не прерывается, чтобы не
-оставить CUDA/model state в повреждённом состоянии. `WORKER_LOCK_TTL_SECONDS`
+пишется в журнал, но активный GPU-вызов принудительно не прерывается, чтобы не
+оставить состояние CUDA и модели повреждённым. `WORKER_LOCK_TTL_SECONDS`
 задаёт короткий TTL регистрации: отдельный heartbeat обновляет её во время
-долгого OCR, а после аварийной остановки другой worker возвращает его in-flight
-задание в общую очередь.
+долгого OCR, а после аварийной остановки другой обработчик возвращает его
+выполнявшееся задание в общую очередь.
 
 ### Порядок запуска
 
-Сначала PostgreSQL, миграции и Redis, затем API и worker в разных терминалах:
+Сначала PostgreSQL, миграции и Redis, затем API и обработчик в разных терминалах:
 
 ```powershell
 .\.venv-gpu\Scripts\python.exe -m alembic upgrade head
@@ -277,12 +281,12 @@ redis-server --port 6379 --save "" --appendonly no
 
 - Swagger UI с ручной отправкой документа: `http://127.0.0.1:8000/docs`;
 - OpenAPI-схема: `http://127.0.0.1:8000/openapi.json`;
-- отдельная проверка PostgreSQL, Redis и регистрации worker: `GET /health`;
+- отдельная проверка PostgreSQL, Redis и регистрации обработчика: `GET /health`;
 - асинхронная постановка проверки: `POST /api/v1/checks`;
 - чтение сохранённого задания: `GET /api/v1/checks/{job_id}`.
 
 `/health` возвращает HTTP 200 только когда доступны PostgreSQL и Redis и в
-Redis присутствует живая регистрация worker. Доступный Redis без worker не
+Redis присутствует живая регистрация обработчика. Доступный Redis без обработчика не
 выдаётся за работоспособную обработку. При ошибке постановки в Redis уже
 созданная запись переводится из `PROCESSING` в `FAILED`.
 
@@ -320,8 +324,8 @@ Redis присутствует живая регистрация worker. Дос�
 ```
 
 Порядок элементов массива `documents` сохраняется. Один документ передаётся в
-worker без преобразования. Несколько PDF/PNG/JPEG объединяются API в один PDF
-в указанном порядке, после чего существующий worker обрабатывает его как одно
+обработчик без преобразования. Несколько PDF/PNG/JPEG объединяются API в один PDF
+в указанном порядке, после чего существующий обработчик выполняет единое
 задание. OCR, Rule Engine и формат результата при этом не меняются. По
 умолчанию разрешено до 10 документов, а лимит загрузки применяется к их
 суммарному декодированному размеру. Число документов можно изменить через
@@ -331,7 +335,7 @@ worker без преобразования. Несколько PDF/PNG/JPEG об
 Старый способ ручной отправки также сохранён. `multipart/form-data` принимает:
 
 - `document` — файл PDF, JPG, JPEG или PNG;
-- `reference` — содержимое reference JSON как строка формы;
+- `reference` — содержимое эталонного JSON как строка формы;
 - `external_id` — необязательный внешний ID документа из 1С.
 
 Пример для Git Bash или Linux:
@@ -375,8 +379,8 @@ curl "http://127.0.0.1:8000/api/v1/checks/db4bd023-70d4-4643-8546-421e65d36af5"
 ```
 
 Каталог каждого запроса имеет вид `runtime/jobs/{job_id}/`: API сохраняет в
-нём `document.pdf|jpg|jpeg|png`, `reference.json` и `job.json`; worker пишет
-обычный результат pipeline в `result/`. API и worker обязаны использовать
+нём `document.pdf|jpg|jpeg|png`, `reference.json` и `job.json`; обработчик пишет
+обычный результат конвейера в `result/`. API и обработчик обязаны использовать
 одинаковый `JOB_STORAGE_ROOT` (локальный диск одного сервера либо общий
 защищённый volume). Worker разрешает путь только внутри каталога этого UUID и
 перед OCR повторно сверяет SHA-256. Бинарный документ в Redis не передаётся.
@@ -392,9 +396,9 @@ api:
 
 PostgreSQL остаётся источником истины. Redis использует надёжную пару списков
 `<queue>:pending` и `<queue>:processing`; получение выполняется атомарным
-перемещением. При старте worker возвращает незавершённые доставки в очередь.
+перемещением. При старте обработчик возвращает незавершённые доставки в очередь.
 Повторно доставленный `job_id` со статусом `COMPLETED` или `FAILED`
-подтверждается без вызова checker. Временный `worker_outcome.json` позволяет
+подтверждается без вызова сервиса проверки. Временный `worker_outcome.json` позволяет
 после восстановления PostgreSQL сохранить уже вычисленный результат без
 повторного OCR и удаляется после успешной фиксации. Входные файлы сохраняются
 для аудита; срок их хранения должен задаваться эксплуатационной политикой и
@@ -414,9 +418,10 @@ PostgreSQL остаётся источником истины. Redis испол�
 - `DeliveryReceipt` — подтверждение конкретного адаптера.
 
 `OneCAdapter` отделяет преобразование входа, получение документа, построение
-wire-response и его отправку. `MockOneCAdapter` читает существующие
-JSON/локальные файлы и атомарно пишет канонический ответ в локальный outbox.
-`HttpOneCAdapter` реализует подтверждённый callback-контракт 1С.
+сетевого ответа и его отправку. `MockOneCAdapter` читает существующие
+JSON или локальные файлы и атомарно пишет канонический ответ в локальную
+исходящую очередь. `HttpOneCAdapter` реализует подтверждённый контракт обратного
+вызова 1С.
 
 Настройки:
 
@@ -446,11 +451,12 @@ ONEC_MOCK_OUTBOX_DIR=runtime/onec/mock_outbox
 `http://host/.../API/v1/sendAiAnswer`. Авторизация не добавляется, пока
 `ONEC_AUTH_TOKEN` пуст; при заданном токене отправляется Bearer-заголовок.
 
-Для локальной проверки mock-отправки установите
-`ONEC_INTEGRATION_ENABLED=true`. Worker сохранит результат в PostgreSQL до
+Для локальной проверки имитации отправки установите
+`ONEC_INTEGRATION_ENABLED=true`. Обработчик сохранит результат в PostgreSQL до
 вызова адаптера. Состояние доставки находится в PostgreSQL в колонках
-`onec_delivery_*`; файловых sidecar для 1С больше нет. Ошибка обратной отправки
-оставляет само задание `COMPLETED` и помечает delivery как `PENDING`.
+`onec_delivery_*`; отдельных сопутствующих файлов для 1С больше нет. Ошибка
+обратной отправки оставляет само задание `COMPLETED` и помечает доставку как
+`PENDING`.
 
 Ручная повторная отправка уже сохранённого payload без OCR:
 
@@ -459,9 +465,9 @@ ONEC_MOCK_OUTBOX_DIR=runtime/onec/mock_outbox
 ```
 
 Повторно доставленный через Redis финальный `job_id` также повторит только
-отправку `PENDING`, не checker. Количество автоматических попыток ограничено
+отправку `PENDING`, а не проверку. Количество автоматических попыток ограничено
 `ONEC_MAX_DELIVERY_ATTEMPTS`; явная операторская команда разрешает ещё одну
-попытку. OCR, Rule Engine, worker orchestration и входной POST-контракт при
+попытку. OCR, механизм правил, управление обработчиком и входной POST-контракт при
 обратной доставке не меняются.
 
 Упрощённый пример результата:
@@ -496,11 +502,11 @@ ONEC_MOCK_OUTBOX_DIR=runtime/onec/mock_outbox
 
 ## Docker-развёртывание
 
-Требуются Docker Compose и NVIDIA Container Toolkit. GPU-worker использует
+Требуются Docker Compose и NVIDIA Container Toolkit. GPU-обработчик использует
 PyTorch 2.7.1/CUDA 12.8 с поддержкой Blackwell `sm_120`; Compose резервирует
-одно GPU-устройство и ровно одну реплику worker. На Blackwell применяется
-PyTorch SDPA, поскольку Flash Attention 2 не поддерживает compute capability
-12.0. Модель подключается внешним read-only bind mount.
+одно GPU-устройство и ровно одну реплику обработчика. На Blackwell применяется
+PyTorch SDPA, поскольку Flash Attention 2 не поддерживает вычислительную
+архитектуру 12.0. Модель подключается внешним монтированием только для чтения.
 
 Подготовьте локальный `.env`:
 
@@ -508,13 +514,14 @@ PyTorch SDPA, поскольку Flash Attention 2 не поддерживает
 Copy-Item .env.example .env
 ```
 
-Обязательно измените `POSTGRES_PASSWORD` и укажите существующий внешний cache:
+Обязательно измените `POSTGRES_PASSWORD` и укажите существующий внешний кэш:
 
 ```text
 MONKEYOCR_MODEL_PATH=C:/Users/Rodion/AppData/Local/specification-checker/huggingface
 ```
 
-Development: Swagger и mock-адаптер 1С включены, retention job-файлов — 7 дней.
+В режиме разработки Swagger и имитационный адаптер 1С включены, срок хранения
+файлов заданий — 7 дней.
 
 ```powershell
 docker compose -f docker-compose.yml -f compose.development.yml up -d --build
@@ -522,7 +529,7 @@ docker compose -f docker-compose.yml -f compose.development.yml ps
 docker compose -f docker-compose.yml -f compose.development.yml logs -f worker
 ```
 
-Миграции выполняются отдельным одноразовым сервисом `migrate` до API/worker.
+Миграции выполняются отдельным одноразовым сервисом `migrate` до API и обработчика.
 Повторный ручной запуск безопасен:
 
 ```powershell
@@ -537,7 +544,8 @@ Start-Process http://127.0.0.1:8000/docs
 .\.venv-gpu\Scripts\python.exe -m pytest -q
 ```
 
-Production: Swagger отключён, retention — 30 дней, mock callback выключен.
+В production-режиме Swagger отключён, срок хранения составляет 30 дней,
+имитация обратного вызова выключена.
 
 ```bash
 docker compose -f docker-compose.yml -f compose.production.yml up -d --build
@@ -547,31 +555,31 @@ docker compose -f docker-compose.yml -f compose.production.yml ps
 Сервисы:
 
 - `api` — лёгкий Python-образ без Torch и модели;
-- `worker` — CUDA worker с одним `SpecificationCheckerService`;
+- `worker` — CUDA-обработчик с одним `SpecificationCheckerService`;
 - `postgres` — PostgreSQL 18;
 - `redis` — Redis с AOF;
 - `migrate` — `alembic upgrade head` и завершение.
 
-Persistent volumes:
+Постоянные тома:
 
-- `jobs_data` — общий `JOB_STORAGE_ROOT` API/worker;
+- `jobs_data` — общий `JOB_STORAGE_ROOT` API и обработчика;
 - `postgres_data` — PostgreSQL 18 (`/var/lib/postgresql`);
 - `redis_data` — AOF очереди;
-- `runtime_cache` — OCR/crop cache worker;
-- `runtime_logs` — runtime-журналы;
-- `onec_outbox` — файлы только mock-адаптера.
+- `runtime_cache` — OCR-кэш и кэш фрагментов обработчика;
+- `runtime_logs` — рабочие журналы;
+- `onec_outbox` — файлы только имитационного адаптера.
 
 При переносе на сервер копируются исходники и защищённый `.env`. Модель заранее
 загружается в отдельный серверный каталог и задаётся через
-`MONKEYOCR_MODEL_PATH`; каталог весов не попадает в build context. Перед
-обновлением создайте backup PostgreSQL volume, затем соберите образы и запустите
-`migrate`. Production-секреты не должны храниться в Git.
+`MONKEYOCR_MODEL_PATH`; каталог весов не попадает в контекст сборки. Перед
+обновлением создайте резервную копию тома PostgreSQL, затем соберите образы и
+запустите `migrate`. Секреты production-среды не должны храниться в Git.
 
-### Retention job-файлов
+### Хранение файлов заданий
 
-Единственный worker удаляет каталоги только финальных заданий старше политики.
+Единственный обработчик удаляет каталоги только финальных заданий старше заданного срока.
 Перед удалением проверяется путь `JOB_STORAGE_ROOT/{job_id}`. В PostgreSQL
-остаются job, решение, полный result, SHA-256 и состояние 1С; очищается только
+остаются задание, решение, полный результат, SHA-256 и состояние 1С; очищается только
 `document_path` и файловый каталог.
 
 ```text
@@ -583,9 +591,9 @@ JOB_CLEANUP_BATCH_SIZE=100
 
 ## Установка на Windows
 
-Требуется Python 3.11–3.12. Для локальной проверки Page Selector также нужен
+Требуется Python 3.11–3.12. Для локальной проверки модуля выбора страниц также нужен
 Tesseract OCR с русским языковым пакетом. Для локального запуска MonkeyOCR рекомендуется
-NVIDIA GPU; текущая конфигурация проверена на RTX 3050 Laptop с 4 ГБ VRAM.
+GPU NVIDIA; текущая конфигурация проверена на RTX 3050 Laptop с 4 ГБ видеопамяти.
 
 ```powershell
 python -m venv .venv-gpu
@@ -595,14 +603,14 @@ python -m venv .venv-gpu
 .\.venv-gpu\Scripts\python.exe -m pip install -e . --no-deps --no-build-isolation
 ```
 
-Однократная загрузка официального checkpoint:
+Однократная загрузка официальной версии весов:
 
 ```powershell
 $env:HF_HOME = "$env:LOCALAPPDATA\specification-checker\huggingface"
 .\.venv-gpu\Scripts\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='zenosai/MonkeyOCRv2-B-Parsing', revision='de7a993bd0f39a97b122dac767e82ae04935bce4')"
 ```
 
-Во время production-проверки сеть не используется: в конфигурации установлено
+Во время проверки в production-среде сеть не используется: в конфигурации установлено
 `local_files_only: true`.
 
 ## Установка на Linux-сервер
@@ -631,7 +639,7 @@ local_files_only: true
 
 ## Проверка одного документа
 
-Git Bash:
+Запуск через Git Bash:
 
 ```bash
 ./.venv-gpu/Scripts/python.exe -m app.cli check \
@@ -645,7 +653,7 @@ Git Bash:
 
 `--force-ocr` принудительно запускает модель. `--reuse-ocr-cache` повторно
 использует результат OCR, если документ, настройки рендеринга, версия адаптера,
-checkpoint и параметры модели не изменились.
+версия весов и параметры модели не изменились.
 
 ## Пакетный OCR
 
@@ -659,12 +667,12 @@ checkpoint и параметры модели не изменились.
   --reuse-ocr-cache
 ```
 
-## Runtime и диагностика
+## Рабочие файлы и диагностика
 
 ```text
 runtime/
   reports/   итоговые отчёты
-  cache/     компактный gzip OCR-кэш и кэш распознанных crop
+  cache/     компактный gzip OCR-кэш и кэш распознанных фрагментов
   logs/      ротируемые логи
   temp/      временные файлы, очищаемые после запуска
 ```
@@ -682,7 +690,7 @@ runtime/
 .\.venv-gpu\Scripts\python.exe -m app.cli cleanup --all --dry-run
 ```
 
-Фактическая очистка runtime-кэша и временных диагностических материалов:
+Фактическая очистка рабочего кэша и временных диагностических материалов:
 
 ```powershell
 .\.venv-gpu\Scripts\python.exe -m app.cli cleanup --all
@@ -694,9 +702,9 @@ runtime/
 .\.venv-gpu\Scripts\python.exe -m pytest -q -m "not slow"
 ```
 
-Тяжёлые OCR-прогоны не входят в быстрый набор. Unit-тесты normalizers,
-extractors и Rule Engine работают без запуска модели; сохранённый OCR-кэш
-позволяет повторно проверять extraction без генерации текста.
+Тяжёлые OCR-прогоны не входят в быстрый набор. Модульные тесты нормализаторов,
+модулей извлечения и механизма правил работают без запуска модели; сохранённый
+OCR-кэш позволяет повторно проверять извлечение данных без генерации текста.
 
 ## Ограничения
 
@@ -704,7 +712,7 @@ extractors и Rule Engine работают без запуска модели; �
   промышленной точности.
 - Детекторы подписи и печати эвристические: они подтверждают визуальные
   признаки, но не устанавливают личность подписанта и подлинность оттиска.
-- MonkeyOCR не предоставляет вероятность каждого токена; confidence поля
-  рассчитывается extractors по качеству, полноте и геометрии доказательств.
+- MonkeyOCR не предоставляет вероятность каждого токена; уверенность поля
+  рассчитывается модулями извлечения по качеству, полноте и геометрии доказательств.
 - При противоречивом или недостаточном результате система сохраняет
   fail-closed поведение и возвращает `MANUAL_REVIEW`.

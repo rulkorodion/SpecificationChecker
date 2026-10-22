@@ -1,93 +1,108 @@
-# MonkeyOCRv2: layout-aware local integration
+# MonkeyOCRv2: локальная интеграция с учётом структуры страницы
 
-Audit date: 2026-07-31.
+Дата аудита: 31.07.2026.
 
-## Pinned sources
+## Зафиксированные источники
 
-- Model: `zenosai/MonkeyOCRv2-B-Parsing`, immutable revision
+- Модель: `zenosai/MonkeyOCRv2-B-Parsing`, неизменяемая ревизия
   `de7a993bd0f39a97b122dac767e82ae04935bce4`.
-- Official repository: <https://github.com/Yuliang-Liu/MonkeyOCRv2>, `main`
-  as inspected on 2026-07-31 (33 commits were shown by GitHub). The integration
-  follows `parsing/core_runner.py` from that snapshot. The upstream repository
-  had no release tag for this parsing snapshot, so the access date is recorded
-  rather than inventing a commit hash.
-- Public Space: <https://huggingface.co/spaces/zenosai/monkey-ocr-v2>, observed
-  revision `b6af3bd` in the Space history on 2026-07-31.
-- Model card: <https://huggingface.co/zenosai/MonkeyOCRv2-B-Parsing>.
+- Официальный репозиторий: <https://github.com/Yuliang-Liu/MonkeyOCRv2>, ветка
+  `main` по состоянию на 31.07.2026 (GitHub показывал 33 коммита). Интеграция
+  следует реализации `parsing/core_runner.py` из этого состояния репозитория.
+  Для данной версии механизма разбора в исходном репозитории не было тега
+  выпуска, поэтому вместо вымышленного хеша коммита указана дата доступа.
+- Публичное пространство: <https://huggingface.co/spaces/zenosai/monkey-ocr-v2>,
+  ревизия `b6af3bd`, зафиксированная в истории пространства 31.07.2026.
+- Карточка модели: <https://huggingface.co/zenosai/MonkeyOCRv2-B-Parsing>.
 
-Local dependency pins are `torch==2.6.0`, `torchvision==0.21.0`,
-`transformers==4.57.6`, `accelerate==1.10.1`, and `einops==0.8.1`.
+Зафиксированные версии локальных зависимостей: `torch==2.6.0`,
+`torchvision==0.21.0`, `transformers==4.57.6`, `accelerate==1.10.1` и
+`einops==0.8.1`.
 
-## Audit: old implementation versus official pipeline
+## Аудит: старая реализация и официальный конвейер
 
-The removed implementation called the official `END2END` prompt once for a
-whole page. Before that call it resized every input exceeding 1,003,520 pixels;
-a 2480x3508 page therefore became approximately 843x1192. It then fabricated a
-uniform block confidence of 0.86 and tried to recover truncated/empty fields by
-rerunning the lower part of the page.
+Удалённая реализация один раз вызывала официальный запрос `END2END` для всей
+страницы. Перед вызовом любой вход размером более 1 003 520 пикселей уменьшался;
+поэтому страница 2480×3508 превращалась примерно в 843×1192. Затем всем блокам
+искусственно назначалась одинаковая уверенность 0,86, а усечённые или пустые
+поля пытались восстановить повторным распознаванием нижней части страницы.
 
-The official non-END2END pipeline is two-stage:
+Официальный конвейер без `END2END` состоит из двух этапов:
 
 1. `LAYOUT`: `Please output the categories and coordinates of the document
-   elements in reading order.` The returned coordinates use the 0..1000 space.
-2. Each resulting bbox is mapped to page pixels, cropped, and recognized with a
-   task prompt. Text-like labels use `Please output the text content from the
-   image.`; tables use the OTSL prompt; formulas use the LaTeX prompt.
-3. Official recognition uses one crop per request, `max_tokens=5000`, and
-   converts OTSL to HTML while preserving reading order.
-4. `Picture` does not undergo text recognition. It is retained as a visual zone.
+   elements in reading order.` Возвращаемые координаты используют диапазон
+   от 0 до 1000.
+2. Каждый полученный ограничивающий прямоугольник переносится в координаты
+   страницы, вырезается и распознаётся специализированным запросом. Для
+   текстовых элементов используется `Please output the text content from the
+   image.`, для таблиц — запрос OTSL, для формул — запрос LaTeX.
+3. Официальное распознавание обрабатывает по одному фрагменту за запрос,
+   использует `max_tokens=5000` и преобразует OTSL в HTML с сохранением порядка
+   чтения.
+4. Элемент `Picture` не проходит распознавание текста и сохраняется как
+   визуальная область.
 
-## Local implementation
+## Локальная реализация
 
-`MonkeyOCRParsingEngine` implements the same stage split. Layout detection sees
-the complete page through a memory-safe aspect-preserving preview; that preview
-is used only to obtain normalized coordinates. Every content crop is taken from the original rendered page,
-never from the model's layout preview. The approximately one-megapixel limit is
-`recognition_max_pixels` and applies only to an individual crop; smaller crops
-are not enlarged or reduced.
+`MonkeyOCRParsingEngine` реализует такое же разделение на этапы. Для определения
+структуры модель видит всю страницу через безопасное по памяти уменьшенное
+изображение с сохранением пропорций. Оно используется только для получения
+нормализованных координат. Каждый содержательный фрагмент вырезается из
+исходной отрендеренной страницы, а не из уменьшенного изображения структуры.
+Ограничение примерно в один мегапиксель задаётся параметром
+`recognition_max_pixels` и применяется только к отдельному фрагменту; меньшие
+фрагменты не увеличиваются и не уменьшаются.
 
-On the local 4 GiB Transformers runtime, layout decoding stops immediately
-after a complete balanced layout list has been generated. The configurable
-`layout_max_seconds` limit fails closed when a response never produces a valid
-closing list. It does not accept a partial layout and does not affect content
-crop resolution.
+В локальной среде Transformers с 4 ГиБ видеопамяти декодирование структуры
+останавливается сразу после формирования полного сбалансированного списка
+элементов. Настраиваемый лимит `layout_max_seconds` завершает обработку по
+принципу безопасного отказа, если ответ так и не содержит корректного
+закрывающего списка. Частичная структура не принимается, а разрешение
+содержательных фрагментов не изменяется.
 
-The checkpoint's stored generation configuration has `use_cache=false`.
-Running that setting through plain Transformers recalculates the complete
-visual prefix for every output token. The local integration explicitly enables
-`transformers_use_kv_cache`; for the 39-element spec5 layout (1314 input and
-approximately 1423 output tokens) the calculated BF16 KV cache is about 299
-MiB. The setting remains configurable, and the structured/time limits remain
-fail-closed.
+В сохранённой конфигурации генерации контрольной точки указано
+`use_cache=false`. При таком режиме обычный Transformers заново вычисляет весь
+визуальный префикс для каждого выходного токена. Локальная интеграция явно
+включает `transformers_use_kv_cache`. Для структуры `spec5` из 39 элементов
+(1314 входных и примерно 1423 выходных токена) расчётный размер KV-кэша BF16
+составляет около 299 МиБ. Настройка остаётся изменяемой, а ограничения структуры
+и времени продолжают работать по принципу безопасного отказа.
 
-Content generation also has an early repeated-tail stop and a configurable
-`element_max_seconds` limit. Repetitive or timed-out output is retained only as
-diagnostic `raw_response`, is excluded from normalized OCR text, and is not
-stored in the crop cache. A doubled retry is allowed only for a genuinely
-length-truncated Table or Formula, never for repetition, timeouts, or ordinary
-Text blocks.
+Для генерации содержимого также предусмотрены ранняя остановка при повторении
+окончания и настраиваемый лимит `element_max_seconds`. Повторяющийся или
+прерванный по времени вывод сохраняется только в диагностическом поле
+`raw_response`, исключается из нормализованного текста OCR и не записывается в
+кэш фрагментов. Повторная попытка с удвоенным лимитом разрешена только для
+действительно усечённой по длине таблицы или формулы, но не при повторениях,
+тайм-аутах или для обычных текстовых блоков.
 
-The output stores the normalized and original pixel bbox, reading order, label,
-raw response, native OTSL/HTML, native Markdown, crop SHA-256, finish reason and
-cache status. Because MonkeyOCR does not publish calibrated block probabilities,
-`model_confidence` is `null`; business extractors calculate evidence confidence.
+Результат содержит нормализованный и исходный ограничивающие прямоугольники в
+пикселях, порядок чтения, тип элемента, необработанный ответ, исходные
+OTSL/HTML и Markdown, SHA-256 фрагмента, причину завершения и состояние кэша.
+MonkeyOCR не публикует калиброванные вероятности блоков, поэтому
+`model_confidence` равен `null`; уверенность доказательств рассчитывают
+прикладные модули извлечения данных.
 
-An unchanged crop is reused from `runtime/cache/monkey_elements`. The document
-OCR cache format is version 3, making old single-pass entries incompatible.
+Неизменившийся фрагмент повторно используется из
+`runtime/cache/monkey_elements`. Формат OCR-кэша документа имеет версию 3,
+поэтому старые записи одноэтапного распознавания несовместимы.
 
-## Windows / 4 GiB differences
+## Особенности Windows и видеопамяти 4 ГиБ
 
-The official preferred runtime is vLLM. Native Windows and a 4 GiB RTX 3050 do
-not provide a practical supported vLLM deployment, so the local default executes
-the same prompts and stage order sequentially through Transformers, with
-`batch_size=1`, BF16 weights, SDPA, `torch.inference_mode()` and CUDA cleanup
-between elements. No quantization, checkpoint substitution or model pruning is
-used. An official OpenAI-compatible vLLM server remains usable with
+Официально предпочтительной средой выполнения является vLLM. В нативной
+Windows на RTX 3050 с 4 ГиБ видеопамяти нет практически применимого
+поддерживаемого варианта vLLM, поэтому локальная конфигурация по умолчанию
+последовательно выполняет те же запросы и этапы через Transformers с
+`batch_size=1`, весами BF16, SDPA, `torch.inference_mode()` и очисткой CUDA
+между элементами. Квантование, замена контрольной точки и прореживание модели
+не используются. Официальный совместимый с OpenAI сервер vLLM по-прежнему
+можно подключить параметрами
 `--monkey-runtime http --monkey-server-url ...`.
 
-## Debug and comparison
+## Диагностика и сравнение
 
-With `--debug-level full`, the `monkey/` report directory contains page layout,
-original-resolution crops, raw recognition responses, native Markdown/tables,
-the neutral OCR document and timings. `compare-monkey` compares a saved local
-result with a JSON/Markdown web result and never starts the model.
+При `--debug-level full` каталог отчёта `monkey/` содержит структуру страниц,
+фрагменты в исходном разрешении, необработанные ответы распознавания, исходные
+Markdown и таблицы, нейтральное представление OCR-документа и измерения времени.
+Команда `compare-monkey` сравнивает сохранённый локальный результат с веб-
+результатом в JSON или Markdown и никогда не запускает модель.
