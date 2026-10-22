@@ -1,0 +1,202 @@
+document:
+  max_specification_pages: 2
+  render_dpi: 300
+  max_pages: 20
+  supported_extensions: [.pdf, .jpg, .jpeg, .png, .tif, .tiff]
+  page_selector:
+    enabled: true
+    engine: tesseract
+    command: tesseract
+    language: rus
+    dpi: 300
+    top_crop_ratio: 0.24
+    bottom_crop_ratio: 0.18
+    timeout_seconds: 20
+
+ocr:
+  backend: monkeyocr_v2
+  preprocessing_version: 2
+  language: ru
+  device: auto
+  min_text_confidence: 0.70
+  retry_with_preprocessing: true
+  preprocessing_profiles: [original, enhanced_gray, geometry_corrected, thresholded]
+  monkeyocr_v2:
+    # The only supported inference path is the verified local-safe runtime.
+    profile: local_safe
+    dtype: auto
+    attention_backend: sdpa
+    image_input_policy: custom_pre_resize
+    max_pixels: 1003520
+    layout_max_pixels: 1003520
+    recognition_max_pixels: 1003520
+    transformers_use_kv_cache: true
+    do_sample: false
+    layout_max_tokens: 4096
+    element_max_tokens: 5000
+    pdf_render_dpi: 300
+    model_id: zenosai/MonkeyOCRv2-B-Parsing
+    # Official zenosai checkpoint pinned to an immutable reviewed snapshot.
+    revision: de7a993bd0f39a97b122dac767e82ae04935bce4
+    # Production inference never contacts a model hoster. Download/update the
+    # official checkpoint explicitly during installation.
+    local_files_only: true
+    modules_cache_dir: runtime/cache/huggingface_modules
+    # Official two-stage prompts: LAYOUT, then Text/List/Table/etc. per crop.
+    prompt_version: 2
+    adapter_version: 4
+    pipeline_version: layout-crops-v1
+    parsing_mode: layout_then_original_crops
+    coordinate_scale: 1000
+    crop_padding_ratio: 0.0025
+    # Fail closed if a local Transformers layout response never closes its
+    # structured list. Normally the closing bracket stops generation earlier.
+    layout_max_seconds: 300
+    # Prevent one malformed crop from occupying the GPU indefinitely.
+    element_max_seconds: 180
+    retry_truncated_element: true
+    element_cache_dir: runtime/cache/monkey_elements
+    model_call_journal: runtime/logs/monkeyocr_model_calls.jsonl
+    request_timeout_seconds: 600
+
+ocr_cache:
+  enabled: true
+  directory: runtime/cache/ocr
+  max_size_mb: 1024
+  retention_days: 30
+  cleanup_on_start: true
+
+runtime:
+  root: runtime
+  reports_dir: runtime/reports
+  debug_dir: runtime/debug
+  temp_dir: runtime/temp
+  logs_dir: runtime/logs
+
+api:
+  jobs_dir: runtime/jobs
+  docs_enabled: true
+  max_upload_size_mb: 25
+  max_reference_size_kb: 256
+  upload_chunk_size_kb: 1024
+  max_documents_per_job: 10
+  rejected_requests_enabled: true
+  rejected_request_retention_hours: 24
+  rejected_request_max_entries: 200
+  rejected_request_max_total_size_mb: 1024
+
+# Replaceable boundary for 1C result delivery. The HTTP adapter sends the
+# confirmed order_id/recomendation contract; mock remains available for tests.
+onec_integration:
+  enabled: false
+  adapter: mock
+  api_url: ""
+  timeout_seconds: 15
+  max_delivery_attempts: 3
+  mock_outbox_dir: runtime/onec/mock_outbox
+
+job_retention:
+  enabled: true
+  retention_days: 30
+  cleanup_interval_seconds: 3600
+  batch_size: 100
+
+logging:
+  max_size_mb: 10
+  backup_count: 5
+
+extraction:
+  anchor_similarity_threshold: 0.80
+  field_confidence_threshold: 0.85
+  visual_confidence_threshold: 0.85
+  totals_row_y_tolerance_ratio: 0.035
+
+date_rule:
+  timezone: Europe/Moscow
+  max_age_days: 2
+
+buyer_visual_checks:
+  search_pages: ALL
+  require_at_least_one_signature: true
+  require_at_least_one_seal: true
+  min_signature_confidence: 0.85
+  min_seal_confidence: 0.85
+  roi_strategy:
+    anchor: Покупатель
+    candidates:
+      - compact
+      - expanded
+      - full_signature_row
+      - lower_half_fallback
+      - anchor_left_extended
+      - anchor_right_extended
+    all_pages: true
+  seal_preprocessing_profiles:
+    - original_rgb
+    - grayscale
+    - clahe
+    - adaptive_threshold
+    - hsv_blue_mask
+    - lab_color_separation
+    - saturation_enhanced
+    - watermark_suppressed
+    - line_suppressed
+    - combined_mask
+  # Kept for backwards-compatible configuration snapshots only.
+  buyer_roi:
+    x_min: 0.48
+    y_min: 0.72
+    x_max: 0.98
+    y_max: 0.98
+
+transportation:
+  included_phrases:
+    - в общую сумму приложения включены расходы
+    - включены расходы по оплате транспортных услуг
+    - расходы связанные с транспортировкой товара включены
+  excluded_phrases:
+    - в общую сумму приложения не включены расходы
+    - транспортные расходы не включены
+    - расходы оплачиваются отдельно
+    - транспортные услуги оплачиваются отдельно
+    - транспортные расходы не входят
+  service_keywords:
+    - доставка
+    - транспортировка
+    - перевозка
+    - транспортные услуги
+    - автотранспорт
+  pickup_implies_not_included: false
+
+delivery:
+  delivery_keywords:
+    - доставка
+    - централизованная доставка
+    - централизованной доставки
+    - силами поставщика
+    - ж/д транспортом
+    - железнодорожным транспортом
+    - автотранспортом
+    - cpt
+    - ddp
+  pickup_keywords:
+    - самовывоз
+    - силами покупателя
+    - выборка покупателем
+    - выборка товара покупателем
+    - exw
+
+payment:
+  prepayment_keywords:
+    - предоплата
+    - аванс
+    - до поставки
+    - до отгрузки
+    - оплата по факту готовности
+    - по факту готовности трубной продукции
+  deferment_keywords:
+    - отсрочка
+    - после поставки
+    - после отгрузки
+    - календарных дней
+    - банковских дней

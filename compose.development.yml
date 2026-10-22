@@ -1,0 +1,13 @@
+services:
+  migrate:
+    environment:
+      SPECIFICATION_CHECKER_CONFIG: /app/config/development.yaml
+  api:
+    environment:
+      SPECIFICATION_CHECKER_CONFIG: /app/config/development.yaml
+      API_DOCS_ENABLED: "true"
+  worker:
+    environment:
+      SPECIFICATION_CHECKER_CONFIG: /app/config/development.yaml
+      ONEC_INTEGRATION_ENABLED: "true"
+      ONEC_ADAPTER: mock

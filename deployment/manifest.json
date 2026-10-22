@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "package_version": "0.1.4-stage6.20260806",
+  "build_status": "pending",
+  "build_date_utc": null,
+  "git_commit": null,
+  "source_version": "pyproject:0.1.0; uncommitted worktree",
+  "source_fingerprint_sha256": null,
+  "target_platform": "linux/amd64",
+  "images": [
+    {"tag": "specification-checker-api:0.1.2-stage6.20260806", "id": null, "digest": null, "size_bytes": null},
+    {"tag": "specification-checker-worker:0.1.4-stage6.20260806", "id": null, "digest": null, "size_bytes": null},
+    {"tag": "postgres:18.4-alpine", "id": null, "digest": "sha256:b6a16ed0eb96e2c362811f7eeb951eac8b459e7b40be4149ea5444aa7c65569b", "size_bytes": null},
+    {"tag": "redis:7.4.10-alpine", "id": null, "digest": "sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf", "size_bytes": null}
+  ],
+  "postgres_version": "18.4-alpine",
+  "redis_version": "7.4.10-alpine",
+  "worker_base_image": "python:3.12-slim-bookworm",
+  "worker_cuda_runtime": "PyTorch 2.7.1 cu128 binary dependencies with Blackwell sm_120 support",
+  "worker_inference": "Verified MonkeyOCR local-safe path: SDPA, deterministic generation, KV cache, 1003520-pixel application limit",
+  "worker_count": 2,
+  "worker_gpu_device_ids": ["0", "1"],
+  "model": {
+    "included": false,
+    "expected_host_path": "/opt/models/MonkeyOCRv2-B-Parsing",
+    "container_path": "/models/huggingface",
+    "mount_mode": "read-only",
+    "model_id": "zenosai/MonkeyOCRv2-B-Parsing"
+  },
+  "docker_images_archive": {
+    "path": "docker-images/specification-checker-images-0.1.4-stage6.20260806-linux-amd64.tar",
+    "sha256": null,
+    "size_bytes": null,
+    "docker_load_verified": false
+  },
+  "required_server_components": [
+    "Linux x86_64",
+    "Docker Engine 24+",
+    "Docker Compose plugin 2+",
+    "NVIDIA driver compatible with CUDA 12.8",
+    "NVIDIA Container Toolkit",
+    "curl",
+    "sha256sum"
+  ]
+}

@@ -1,0 +1,191 @@
+name: specification-checker
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-spec_checker}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-spec_checker}
+  REDIS_URL: redis://redis:6379/0
+  REDIS_QUEUE_NAME: ${REDIS_QUEUE_NAME:-specification_checks}
+  JOB_STORAGE_ROOT: /runtime/jobs
+  API_MAX_DOCUMENTS_PER_JOB: ${API_MAX_DOCUMENTS_PER_JOB:-10}
+  SPECIFICATION_CHECKER_CONFIG: /app/config/${APP_CONFIG_FILE:-production.yaml}
+  TZ: UTC
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-spec_checker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-spec_checker}
+      TZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spec_checker} -d ${POSTGRES_DB:-spec_checker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: specification-checker-api:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: "no"
+    environment: *app-environment
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: specification-checker-api:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    environment: *app-environment
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    volumes:
+      - jobs_data:/runtime/jobs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+
+  worker: &worker-service
+    image: specification-checker-worker:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      HF_HOME: /models/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      MONKEYOCR_DTYPE: ${MONKEYOCR_DTYPE:-auto}
+      MONKEYOCR_MAX_PIXELS: ${MONKEYOCR_MAX_PIXELS:-1003520}
+      MONKEYOCR_MAX_NEW_TOKENS: ${MONKEYOCR_MAX_NEW_TOKENS:-}
+      MONKEYOCR_PDF_RENDER_DPI: ${MONKEYOCR_PDF_RENDER_DPI:-300}
+      WORKER_ID: worker-gpu-0
+      NVIDIA_VISIBLE_DEVICES: "0"
+      REDIS_BLOCK_TIMEOUT_SECONDS: ${REDIS_BLOCK_TIMEOUT_SECONDS:-5}
+      REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-10}
+      WORKER_RECONNECT_DELAY_SECONDS: ${WORKER_RECONNECT_DELAY_SECONDS:-2}
+      WORKER_JOB_TIMEOUT_SECONDS: ${WORKER_JOB_TIMEOUT_SECONDS:-3600}
+      WORKER_LOCK_TTL_SECONDS: ${WORKER_LOCK_TTL_SECONDS:-120}
+      JOB_CLEANUP_ENABLED: ${JOB_CLEANUP_ENABLED:-true}
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-30}
+      JOB_CLEANUP_INTERVAL_SECONDS: ${JOB_CLEANUP_INTERVAL_SECONDS:-3600}
+      JOB_CLEANUP_BATCH_SIZE: ${JOB_CLEANUP_BATCH_SIZE:-100}
+      ONEC_INTEGRATION_ENABLED: ${ONEC_INTEGRATION_ENABLED:-false}
+      ONEC_ADAPTER: ${ONEC_ADAPTER:-mock}
+      ONEC_API_URL: ${ONEC_API_URL:-}
+      ONEC_AUTH_TOKEN: ${ONEC_AUTH_TOKEN:-}
+      ONEC_AUTH_USERNAME: ${ONEC_AUTH_USERNAME:-}
+      ONEC_AUTH_PASSWORD: ${ONEC_AUTH_PASSWORD:-}
+      ONEC_TIMEOUT_SECONDS: ${ONEC_TIMEOUT_SECONDS:-15}
+      ONEC_MAX_DELIVERY_ATTEMPTS: ${ONEC_MAX_DELIVERY_ATTEMPTS:-3}
+      ONEC_MOCK_OUTBOX_DIR: /runtime/onec/mock_outbox
+    volumes:
+      - jobs_data:/runtime/jobs
+      - runtime_cache:/runtime/cache
+      - runtime_logs:/runtime/logs
+      - onec_outbox:/runtime/onec
+      - type: bind
+        source: ${MONKEYOCR_MODEL_PATH:?MONKEYOCR_MODEL_PATH is required}
+        target: /models/huggingface
+        read_only: true
+    shm_size: "2gb"
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker_health"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  # Activated explicitly for a two-GPU host:
+  # docker compose --profile dual-gpu up ...
+  worker-gpu-1:
+    <<: *worker-service
+    profiles: ["dual-gpu"]
+    environment:
+      <<: *app-environment
+      HF_HOME: /models/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      MONKEYOCR_DTYPE: ${MONKEYOCR_DTYPE:-auto}
+      MONKEYOCR_MAX_PIXELS: ${MONKEYOCR_MAX_PIXELS:-1003520}
+      MONKEYOCR_MAX_NEW_TOKENS: ${MONKEYOCR_MAX_NEW_TOKENS:-}
+      MONKEYOCR_PDF_RENDER_DPI: ${MONKEYOCR_PDF_RENDER_DPI:-300}
+      WORKER_ID: worker-gpu-1
+      NVIDIA_VISIBLE_DEVICES: "1"
+      REDIS_BLOCK_TIMEOUT_SECONDS: ${REDIS_BLOCK_TIMEOUT_SECONDS:-5}
+      REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-10}
+      WORKER_RECONNECT_DELAY_SECONDS: ${WORKER_RECONNECT_DELAY_SECONDS:-2}
+      WORKER_JOB_TIMEOUT_SECONDS: ${WORKER_JOB_TIMEOUT_SECONDS:-3600}
+      WORKER_LOCK_TTL_SECONDS: ${WORKER_LOCK_TTL_SECONDS:-120}
+      JOB_CLEANUP_ENABLED: ${JOB_CLEANUP_ENABLED:-true}
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-30}
+      JOB_CLEANUP_INTERVAL_SECONDS: ${JOB_CLEANUP_INTERVAL_SECONDS:-3600}
+      JOB_CLEANUP_BATCH_SIZE: ${JOB_CLEANUP_BATCH_SIZE:-100}
+      ONEC_INTEGRATION_ENABLED: ${ONEC_INTEGRATION_ENABLED:-false}
+      ONEC_ADAPTER: ${ONEC_ADAPTER:-mock}
+      ONEC_API_URL: ${ONEC_API_URL:-}
+      ONEC_AUTH_TOKEN: ${ONEC_AUTH_TOKEN:-}
+      ONEC_AUTH_USERNAME: ${ONEC_AUTH_USERNAME:-}
+      ONEC_AUTH_PASSWORD: ${ONEC_AUTH_PASSWORD:-}
+      ONEC_TIMEOUT_SECONDS: ${ONEC_TIMEOUT_SECONDS:-15}
+      ONEC_MAX_DELIVERY_ATTEMPTS: ${ONEC_MAX_DELIVERY_ATTEMPTS:-3}
+      ONEC_MOCK_OUTBOX_DIR: /runtime/onec/mock_outbox
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+volumes:
+  jobs_data:
+  postgres_data:
+  redis_data:
+  runtime_cache:
+  runtime_logs:
+  onec_outbox:

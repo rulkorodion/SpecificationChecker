@@ -1,0 +1,36 @@
+.venv/
+.venv-gpu/
+.venv-monkey/
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.secret.yaml
+models/
+.cache/
+deployment/docker-images/*.tar
+deployment-package-*.tar.gz
+deployment-package-*.tar.gz.sha256
+runtime/
+cache/
+debug/
+output/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+.pytest-publish*/
+.coverage
+htmlcov/
+output/*
+!output/.gitkeep
+tmp/
+
+# Private corporate test corpus. Keep these files local and provide them
+# separately when running real-document regression tests.
+testdata/specifications/documents/
+testdata/specifications/reference/
+testdata/specifications/ground_truth/
+deployment/smoke/document.pdf
+deployment/smoke/reference.json
+docs/rules_for_verification.docx

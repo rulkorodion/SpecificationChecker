@@ -1,0 +1,16 @@
+{
+  "application_number": {"value": "76930", "confidence": 0.99},
+  "application_date": {"value": "2026-04-01", "confidence": 0.99},
+  "total_quantity": {"value": "69.284", "confidence": 0.40},
+  "total_with_vat": {"value": "5272993.70", "confidence": 0.99},
+  "transportation_costs_included": {"value": true, "confidence": 0.99},
+  "delivery_deadline": {"value": "2026-04-24", "confidence": 0.99},
+  "delivery_type": {"value": "DELIVERY", "confidence": 0.99},
+  "payment_type": {"value": "PREPAYMENT", "confidence": 0.99},
+  "deferment_days": {"value": null, "confidence": 1.0},
+  "mandatory_clause_1_present": {"value": true, "confidence": 0.99},
+  "mandatory_clause_2_present": {"value": true, "confidence": 0.99},
+  "buyer_signature_present": {"value": "PRESENT", "confidence": 0.99},
+  "buyer_seal_present": {"value": "PRESENT", "confidence": 0.99}
+}
+

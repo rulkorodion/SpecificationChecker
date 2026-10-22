@@ -1,0 +1,33 @@
+api:
+  jobs_dir: /runtime/jobs
+  docs_enabled: false
+
+runtime:
+  root: /runtime
+  reports_dir: /runtime/reports
+  debug_dir: /runtime/debug
+  temp_dir: /runtime/temp
+  logs_dir: /runtime/logs
+
+ocr_cache:
+  directory: /runtime/cache/ocr
+
+ocr:
+  device: gpu:0
+  monkeyocr_v2:
+    cache_dir: /models/huggingface
+    modules_cache_dir: /runtime/cache/huggingface_modules
+    element_cache_dir: /runtime/cache/monkey_elements
+    model_call_journal: /runtime/logs/monkeyocr_model_calls.jsonl
+    local_files_only: true
+
+onec_integration:
+  enabled: false
+  adapter: mock
+  mock_outbox_dir: /runtime/onec/mock_outbox
+
+job_retention:
+  enabled: true
+  retention_days: 30
+  cleanup_interval_seconds: 3600
+  batch_size: 100

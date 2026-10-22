@@ -1,0 +1,40 @@
+FROM python:3.12-slim-bookworm
+
+ARG APP_VERSION=dev
+ARG VCS_REF=unavailable
+LABEL org.opencontainers.image.title="Specification Checker GPU Worker" \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$VCS_REF
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends libglib2.0-0 libgl1 libgomp1 tesseract-ocr tesseract-ocr-rus \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home app
+
+WORKDIR /app
+COPY requirements.txt requirements-monkeyocr.txt pyproject.toml README.md ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt \
+    && python -m pip install -r requirements-monkeyocr.txt
+
+COPY app ./app
+COPY config ./config
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+RUN python -m pip install --no-deps . \
+    && mkdir -p /runtime/jobs /runtime/cache /runtime/logs /runtime/onec \
+    && chown -R app:app /runtime /app
+
+USER app
+CMD ["python", "-m", "app.worker"]

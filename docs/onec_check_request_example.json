@@ -1,0 +1,26 @@
+{
+  "external_id": "1C-001",
+  "documents": [
+    {
+      "filename": "specification.pdf",
+      "content_type": "application/pdf",
+      "content_base64": "JVBERi0xLjQKLi4u"
+    },
+    {
+      "filename": "attachment.jpg",
+      "content_type": "image/jpeg",
+      "content_base64": "/9j/4AAQSkZJRgABAQ..."
+    }
+  ],
+  "reference": {
+    "specification_id": "1C-001",
+    "application_number": "208341",
+    "total_quantity": "0.123",
+    "total_with_vat": "8902.34",
+    "transportation_costs_included": false,
+    "delivery_deadline": "2026-08-30",
+    "delivery_type": "PICKUP",
+    "payment_type": "PREPAYMENT",
+    "deferment_days": null
+  }
+}

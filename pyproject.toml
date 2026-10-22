@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specification-checker"
+version = "0.1.0"
+description = "Локальный fail-closed пилот проверки спецификаций к договорам поставки"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "pydantic==2.11.7",
+  "PyYAML==6.0.2",
+  "numpy==2.2.6",
+  "Pillow==11.3.0",
+  "PyMuPDF==1.26.3",
+  "opencv-python-headless==4.12.0.88",
+  "fastapi==0.140.0",
+  "uvicorn==0.51.0",
+  "python-multipart==0.0.32",
+  "SQLAlchemy==2.0.51",
+  "psycopg[binary]==3.3.4",
+  "alembic==1.18.5",
+  "redis==8.0.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.1", "httpx2==2.7.0"]
+
+[project.scripts]
+specification-checker = "app.cli:main"
+specification-checker-api = "app.api.app:run"
+specification-checker-worker = "app.worker:main"
+specification-checker-onec-retry = "app.integrations.retry:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp -m 'not slow'"
+markers = [
+  "ocr: tests requiring locally downloaded OCR models",
+  "integration: integration tests",
+  "slow: expensive visual/OCR regressions excluded from the development loop",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

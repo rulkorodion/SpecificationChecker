@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "expected_pages": 8,
+  "documents": [
+    {
+      "document_id": "ambiguous-001",
+      "relative_path": "Листы, карты, полоса, штрипс/ГОСТы, ТУ/ТУ 14-1-3579-83/ty-14-1-3579-83  из интернета.pdf",
+      "pages": "15"
+    },
+    {
+      "document_id": "ambiguous-002",
+      "relative_path": "Наше дело труба/ГОСТы/ГОСТ 8645-68 Трубы стальные прямоугольные.pdf",
+      "pages": "1-6"
+    },
+    {
+      "document_id": "ambiguous-003",
+      "relative_path": "Продажи/Алгоритм выявления потребности.pdf",
+      "pages": "1"
+    }
+  ]
+}
